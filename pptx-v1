@@ -1,103 +1,66 @@
 from pptx import Presentation
 
-def copy_font_formatting(source_font, target_font):
-    """Safely extracts and applies font formatting from one run to another."""
-    target_font.name = source_font.name
-    target_font.size = source_font.size
-    target_font.bold = source_font.bold
-    target_font.italic = source_font.italic
-    target_font.underline = source_font.underline
-    
-    # Extracting color can be finicky depending on if it's an RGB or Theme color
-    try:
-        if source_font.color and source_font.color.type is not None:
-            if hasattr(source_font.color, 'rgb') and source_font.color.rgb:
-                target_font.color.rgb = source_font.color.rgb
-            elif hasattr(source_font.color, 'theme_color'):
-                target_font.color.theme_color = source_font.color.theme_color
-    except AttributeError:
-        pass # If color extraction fails, default to presentation theme
-
 def process_text_frame(text_frame, replace_dict):
-    """Attempts simple run-level replacement, falling back to advanced paragraph-level if needed."""
+    """Replaces text while preserving precise run-level formatting, even for split placeholders."""
     for paragraph in text_frame.paragraphs:
-        
-        # Check if there are any keys to replace in this paragraph
-        keys_in_paragraph = [key for key in replace_dict.keys() if key in paragraph.text]
-        if not keys_in_paragraph:
-            continue
+        for key, value in replace_dict.items():
             
-        # STEP 1: The Simple Approach (Run-Level)
-        # Try to find and replace the key intact within individual runs
-        for run in paragraph.runs:
-            for key in keys_in_paragraph:
+            # STEP 1: Simple Run-Level Replacement (for intact placeholders)
+            for run in paragraph.runs:
                 if key in run.text:
-                    run.text = run.text.replace(key, str(replace_dict[key]))
-                    
-        # STEP 2: The Advanced Approach (Paragraph-Level Fallback)
-        # If any key is STILL in paragraph.text, it means it was split across multiple runs
-        remaining_keys = [key for key in keys_in_paragraph if key in paragraph.text]
-        
-        if remaining_keys and paragraph.runs:
-            # Save the full paragraph text and apply all remaining replacements
-            full_text = paragraph.text
-            for key in remaining_keys:
-                full_text = full_text.replace(key, str(replace_dict[key]))
+                    run.text = run.text.replace(key, str(value))
+            
+            # STEP 2: Cross-Run Replacement (for split placeholders)
+            # If the key is still in the paragraph, it is split across multiple runs.
+            while key in paragraph.text:
+                runs = paragraph.runs
+                run_texts = [r.text for r in runs]
+                full_text = "".join(run_texts)
                 
-            # Extract formatting from the very first run as our baseline
-            reference_font = paragraph.runs[0].font
-            
-            # Save font attributes temporarily since clearing the paragraph destroys the reference
-            font_kwargs = {
-                'name': reference_font.name,
-                'size': reference_font.size,
-                'bold': reference_font.bold,
-                'italic': reference_font.italic,
-                'underline': reference_font.underline,
-            }
-            # Handle color safely before clearing
-            color_rgb = None
-            color_theme = None
-            try:
-                if reference_font.color and reference_font.color.type is not None:
-                    if hasattr(reference_font.color, 'rgb') and reference_font.color.rgb:
-                        color_rgb = reference_font.color.rgb
-                    elif hasattr(reference_font.color, 'theme_color'):
-                        color_theme = reference_font.color.theme_color
-            except AttributeError:
-                pass
-
-            # Clear fragmented runs and rebuild as a single run
-            paragraph.clear()
-            new_run = paragraph.add_run()
-            new_run.text = full_text
-            
-            # Apply saved formatting
-            new_run.font.name = font_kwargs['name']
-            new_run.font.size = font_kwargs['size']
-            new_run.font.bold = font_kwargs['bold']
-            new_run.font.italic = font_kwargs['italic']
-            new_run.font.underline = font_kwargs['underline']
-            
-            if color_rgb:
-                new_run.font.color.rgb = color_rgb
-            elif color_theme:
-                new_run.font.color.theme_color = color_theme
+                # Find where the placeholder starts and ends in the merged string
+                start_idx = full_text.find(key)
+                if start_idx == -1:
+                    break 
+                    
+                end_idx = start_idx + len(key)
+                
+                # Helper function to map a character index back to its specific run and local offset
+                def get_run_and_offset(abs_idx):
+                    current = 0
+                    for i, run_text in enumerate(run_texts):
+                        if current <= abs_idx < current + len(run_text):
+                            return i, abs_idx - current
+                        current += len(run_text)
+                    return len(run_texts) - 1, len(run_texts[-1])
+                
+                start_run_idx, start_local = get_run_and_offset(start_idx)
+                end_run_idx, end_local = get_run_and_offset(end_idx)
+                
+                # A. Update the starting run: keep its prefix, append the replacement text
+                runs[start_run_idx].text = run_texts[start_run_idx][:start_local] + str(value)
+                
+                # B. Empty out any intermediate runs that contained pieces of the placeholder
+                for i in range(start_run_idx + 1, end_run_idx):
+                    runs[i].text = ""
+                    
+                # C. Update the ending run: keep its suffix (if it had text after the placeholder)
+                if start_run_idx != end_run_idx:
+                    runs[end_run_idx].text = run_texts[end_run_idx][end_local:]
+                else:
+                    # If start and end ended up in the same run, append the suffix to the starting run
+                    runs[start_run_idx].text += run_texts[end_run_idx][end_local:]
 
 def process_shape(shape, replace_dict):
     """Routes the shape to the text processor depending on its type."""
-    # Handle standard text boxes and shapes
     if shape.has_text_frame:
         process_text_frame(shape.text_frame, replace_dict)
         
-    # Handle tables explicitly
     elif shape.has_table:
         for row in shape.table.rows:
             for cell in row.cells:
                 process_text_frame(cell.text_frame, replace_dict)
                 
-    # Bonus: Handle grouped shapes (shapes inside of other shapes)
-    elif hasattr(shape, 'shape_type') and shape.shape_type == 6: # 6 is MSO_SHAPE_TYPE.GROUP
+    elif hasattr(shape, 'shape_type') and shape.shape_type == 6: # MSO_SHAPE_TYPE.GROUP
         for sub_shape in shape.shapes:
             process_shape(sub_shape, replace_dict)
 
