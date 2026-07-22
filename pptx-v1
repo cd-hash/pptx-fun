@@ -5,12 +5,9 @@ from pptx import Presentation
 def get_slide_by_title(prs, target_title):
     """Finds a slide by its title text."""
     for slide in prs.slides:
-        # Check standard layout title placeholder first
         if slide.shapes.title and slide.shapes.title.has_text_frame:
             if slide.shapes.title.text_frame.text.strip() == target_title:
                 return slide
-        
-        # Fallback: Scan all shapes for a matching text block if title layout wasn't used
         for shape in slide.shapes:
             if shape.has_text_frame and shape.text_frame.text.strip() == target_title:
                 return slide
@@ -20,33 +17,39 @@ def write_to_cell_preserving_format(cell, value):
     """Writes text into a table cell while keeping its template font styles."""
     p = cell.text_frame.paragraphs[0]
     if p.runs:
-        # Overwrite the first run to keep original font/color/size
         p.runs[0].text = str(value)
-        # Clear out any residual text runs in that cell
         for extra_run in p.runs[1:]:
             extra_run.text = ""
     else:
         cell.text = str(value)
 
-def fill_table_from_df(slide, df, include_headers=True, start_row=0, start_col=0):
-    """Finds the first table on a slide and populates it with DataFrame contents."""
-    # 1. Locate the table shape
+def fill_table_from_df(slide, df, include_headers=True, start_row=0, start_col=0, table_name=None):
+    """Finds a specific table on a slide and populates it with DataFrame contents."""
     table_shape = None
+    
+    # Locate the target table
     for shape in slide.shapes:
         if shape.has_table:
-            table_shape = shape.table
-            break
+            if table_name:
+                # Extract all text from the first row of this table to check for the name
+                first_row_text = " ".join(cell.text_frame.text.strip() for cell in shape.table.rows[0].cells)
+                if table_name in first_row_text:
+                    table_shape = shape.table
+                    break
+            else:
+                # Default to the first table found if no name is specified
+                table_shape = shape.table
+                break
             
     if not table_shape:
-        print("Warning: No table found on this slide.")
+        target_str = f"named '{table_name}'" if table_name else ""
+        print(f"Warning: No table {target_str} found on this slide.")
         return
 
     num_table_rows = len(table_shape.rows)
     num_table_cols = len(table_shape.columns)
-    
     current_row = start_row
 
-    # 2. Optionally paste headers
     if include_headers:
         if current_row < num_table_rows:
             for c_idx, col_name in enumerate(df.columns):
@@ -56,10 +59,9 @@ def fill_table_from_df(slide, df, include_headers=True, start_row=0, start_col=0
                     write_to_cell_preserving_format(cell, col_name)
             current_row += 1
 
-    # 3. Paste DataFrame body rows
     for r_idx, row_values in enumerate(df.values):
         if current_row >= num_table_rows:
-            print(f"Warning: DataFrame exceeded available table rows at row index {current_row}. Truncating.")
+            print(f"Warning: DataFrame exceeded available table rows at index {current_row}. Truncating.")
             break
             
         for c_idx, val in enumerate(row_values):
@@ -67,9 +69,7 @@ def fill_table_from_df(slide, df, include_headers=True, start_row=0, start_col=0
             if target_col < num_table_cols:
                 cell = table_shape.cell(current_row, target_col)
                 write_to_cell_preserving_format(cell, val)
-        
         current_row += 1
-
 
 
 def process_text_frame(text_frame, replace_dict):
@@ -126,37 +126,50 @@ def process_shape(shape, replace_dict):
             process_shape(sub_shape, replace_dict)
 
 
-
-def automate_presentation(template_path, output_path, text_replace_dict, table_data_configs=None):
-    """Main function handling text replacement AND targeted dataframe table insertion."""
+def build_single_presentation(template_path, output_path, text_replace_dict, table_data_configs=None):
+    """Processes a single presentation trial."""
     prs = Presentation(template_path)
 
-    # 1. First, handle all standard global text placeholders
+    # 1. Handle all standard global text placeholders
     for slide in prs.slides:
         for shape in slide.shapes:
             process_shape(shape, text_replace_dict)
 
-    # 2. Next, process specific table injections via dataframes
+    # 2. Process specific table injections
     if table_data_configs:
         for config in table_data_configs:
             slide_title = config.get("slide_title")
-            df = config.get("dataframe")
-            
             target_slide = get_slide_by_title(prs, slide_title)
+            
             if target_slide:
                 fill_table_from_df(
                     slide=target_slide,
-                    df=df,
+                    df=config.get("dataframe"),
                     include_headers=config.get("include_headers", True),
                     start_row=config.get("start_row", 0),
-                    start_col=config.get("start_col", 0)
+                    start_col=config.get("start_col", 0),
+                    table_name=config.get("table_name") # Targets specific table on the slide
                 )
             else:
-                print(f"Warning: Could not find a slide titled '{slide_title}'")
+                print(f"Warning: Could not find a slide titled '{slide_title}' for output {output_path}")
 
     prs.save(output_path)
-    print(f"Presentation successfully saved to {output_path}")
+    print(f"Success: Saved {output_path}")
+
+def run_batch_presentations(template_path, trials):
+    """Iterates through a list of trial configurations to generate multiple presentations."""
+    print(f"Starting batch job for {len(trials)} presentations...")
+    for idx, trial in enumerate(trials, 1):
+        print(f"Processing trial {idx}/{len(trials)}: {trial['output_path']}")
+        
+        build_single_presentation(
+            template_path=template_path,
+            output_path=trial["output_path"],
+            text_replace_dict=trial.get("text_replace_dict", {}),
+            table_data_configs=trial.get("table_data_configs", [])
+        )
+    print("Batch processing complete!")
 
 
-    # Run automation pipeline
-    # automate_presentation("template.pptx", "automated_deck.pptx", replace_dict, table_configs)
+    # Run the batch
+    # run_batch_presentations("template.pptx", batch_trials)
