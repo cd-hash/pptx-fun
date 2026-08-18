@@ -63,20 +63,29 @@ def process_shape(shape, replace_dict):
 
 # --- Table Injection Methods ---
 
-def fill_table_from_df(slide, df, include_headers=True, start_row=0, start_col=0, table_name=None):
+def fill_table_from_df(slide, df, include_headers=True, start_row=0, start_col=0, table_name=None, table_index=0):
     table_shape = None
+    current_table_idx = 0
+    
     for shape in slide.shapes:
         if shape.has_table:
+            # Route A: Target by specific name
             if table_name:
                 if table_name in " ".join(cell.text_frame.text.strip() for cell in shape.table.rows[0].cells):
                     table_shape = shape.table
                     break
+            # Route B: Target by index if no name is provided
             else:
-                table_shape = shape.table
-                break
+                if current_table_idx == table_index:
+                    table_shape = shape.table
+                    break
+                current_table_idx += 1  # Increment if this wasn't the index we wanted
                 
-    if not table_shape: return
+    if not table_shape: 
+        print(f"Warning: Table at index {table_index} (or name '{table_name}') not found.")
+        return
 
+    # ... [The rest of the function remains exactly the same] ...
     num_table_rows = len(table_shape.rows)
     num_table_cols = len(table_shape.columns)
     current_row = start_row
