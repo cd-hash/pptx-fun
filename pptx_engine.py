@@ -171,7 +171,8 @@ def build_single_presentation(template_path, output_path, text_replace_dict, tab
                     include_headers=config.get("include_headers", True),
                     start_row=config.get("start_row", 0),
                     start_col=config.get("start_col", 0),
-                    table_name=config.get("table_name")
+                    table_name=config.get("table_name"),
+                    table_index=config.get("table_index", 0)
                 )
 
     # 3. Complex Hierarchical Tables
